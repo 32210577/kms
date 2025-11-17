@@ -1,0 +1,334 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+// ===== 1. MeteorSpawner.cs: 운석 스폰 관리 =====
+public class MeteorSpawner : MonoBehaviour
+{
+    [Header("스폰 설정")]
+    public GameObject meteorPrefab;
+    public float spawnInterval = 2f;
+    public float meteorSpeed = 5f;
+    public float startDelay = 3f;
+    
+    [Header("고급 설정")]
+    public int maxMeteors = 10; // 최대 동시 운석 수
+    public float spawnChance = 0.7f; // 스폰 확률 (랜덤성 추가)
+
+    private Camera mainCamera;
+    private List<GameObject> activeMeteors = new List<GameObject>();
+
+    void Start()
+    {
+        mainCamera = Camera.main;
+        StartCoroutine(SpawnMeteorsRoutine());
+    }
+
+    IEnumerator SpawnMeteorsRoutine()
+    {
+        yield return new WaitForSeconds(startDelay);
+        
+        while (true)
+        {
+            // 최대 수 체크
+            if (activeMeteors.Count < maxMeteors && Random.value < spawnChance)
+            {
+                SpawnMeteor();
+            }
+            
+            yield return new WaitForSeconds(spawnInterval);
+        }
+    }
+
+    void SpawnMeteor()
+    {
+        // 화면 상단 랜덤 x 위치
+        float randomX = Random.Range(
+            mainCamera.ViewportToWorldPoint(Vector3.left).x,
+            mainCamera.ViewportToWorldPoint(Vector3.right).x
+        );
+        
+        Vector3 spawnPos = new Vector3(randomX, 
+            mainCamera.ViewportToWorldPoint(Vector3.up).y + 2f, 0);
+        
+        GameObject meteor = Instantiate(meteorPrefab, spawnPos, Quaternion.identity);
+        Meteor meteorScript = meteor.GetComponent<Meteor>();
+        
+        if (meteorScript != null)
+        {
+            meteorScript.SetSpeed(meteorSpeed);
+            meteorScript.SetSpawner(this);
+        }
+        
+        activeMeteors.Add(meteor);
+    }
+
+    public void RemoveMeteor(GameObject meteor)
+    {
+        activeMeteors.Remove(meteor);
+    }
+}
+
+// ===== 2. Meteor.cs: 개별 운석 =====
+public class Meteor : MonoBehaviour
+{
+    [HideInInspector] public float speed;
+    private MeteorSpawner spawner;
+    private Camera mainCamera;
+    private ParticleSystem explosionEffect;
+    
+    [Header("효과")]
+    public GameObject explosionPrefab; // 폭발 이펙트 prefab (옵션)
+    
+    void Start()
+    {
+        mainCamera = Camera.main;
+        explosionEffect = GetComponent<ParticleSystem>();
+        
+        // 회전 애니메이션 시작
+        StartCoroutine(RotateMeteor());
+    }
+    
+    public void SetSpeed(float newSpeed)
+    {
+        speed = newSpeed + Random.Range(-1f, 1f); // 약간의 랜덤성
+    }
+    
+    public void SetSpawner(MeteorSpawner spawnerRef)
+    {
+        spawner = spawnerRef;
+    }
+    
+    void Update()
+    {
+        // 아래로 떨어짐 + 약간의 좌우 흔들림
+        Vector3 movement = Vector3.down * speed * Time.deltaTime;
+        movement.x = Mathf.Sin(Time.time * 3f + transform.position.y) * 0.5f * Time.deltaTime;
+        transform.Translate(movement);
+        
+        // 화면 밖이면 파괴
+        if (transform.position.y < mainCamera.ViewportToWorldPoint(Vector3.down).y - 3f)
+        {
+            DestroyMeteor();
+        }
+    }
+    
+    IEnumerator RotateMeteor()
+    {
+        while (true)
+        {
+            transform.Rotate(0, 0, 100f * Time.deltaTime);
+            yield return null;
+        }
+    }
+    
+    void DestroyMeteor()
+    {
+        if (spawner != null)
+            spawner.RemoveMeteor(gameObject);
+            
+        // 폭발 이펙트
+        if (explosionEffect != null)
+            explosionEffect.Play();
+            
+        if (explosionPrefab != null)
+            Instantiate(explosionPrefab, transform.position, Quaternion.identity);
+            
+        Destroy(gameObject, 0.5f);
+    }
+    
+    // 플레이어 충돌
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        if (other.CompareTag("Player"))
+        {
+            PlayerHealth playerHealth = other.GetComponent<PlayerHealth>();
+            if (playerHealth != null)
+            {
+                playerHealth.TakeDamage(1);
+            }
+            DestroyMeteor();
+        }
+    }
+}
+
+// ===== 3. PlayerController.cs: 기본 플레이어 컨트롤 =====
+public class PlayerController : MonoBehaviour
+{
+    [Header("이동")]
+    public float moveSpeed = 7f;
+    public float maxSpeed = 10f;
+    
+    [Header("발사")]
+    public GameObject bulletPrefab;
+    public Transform firePoint;
+    public float fireRate = 0.2f;
+    
+    private Rigidbody2D rb;
+    private Camera mainCamera;
+    private float nextFireTime;
+    
+    void Start()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        mainCamera = Camera.main;
+    }
+    
+    void Update()
+    {
+        // 이동
+        Vector2 input = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+        rb.velocity = Vector2.ClampMagnitude(input * moveSpeed, maxSpeed);
+        
+        // 화면 경계 제한
+        Vector3 pos = transform.position;
+        Vector3 viewPos = mainCamera.WorldToViewportPoint(pos);
+        viewPos.x = Mathf.Clamp01(viewPos.x);
+        viewPos.y = Mathf.Clamp01(viewPos.y);
+        transform.position = mainCamera.ViewportToWorldPoint(viewPos);
+        
+        // 발사
+        if (Input.GetKey(KeyCode.Z) && Time.time >= nextFireTime)
+        {
+            Shoot();
+            nextFireTime = Time.time + fireRate;
+        }
+    }
+    
+    void Shoot()
+    {
+        Instantiate(bulletPrefab, firePoint.position, firePoint.rotation);
+    }
+}
+
+// ===== 4. PlayerHealth.cs: 플레이어 체력 =====
+public class PlayerHealth : MonoBehaviour
+{
+    public int maxHealth = 3;
+    public GameObject[] lifeIcons; // UI 하트 이미지들
+    
+    private int currentHealth;
+    
+    void Start()
+    {
+        currentHealth = maxHealth;
+        UpdateLifeUI();
+    }
+    
+    public void TakeDamage(int damage)
+    {
+        currentHealth -= damage;
+        UpdateLifeUI();
+        
+        if (currentHealth <= 0)
+        {
+            GameOver();
+        }
+        else
+        {
+            // 무적 시간
+            StartCoroutine(InvincibleBlink());
+        }
+    }
+    
+    void UpdateLifeUI()
+    {
+        for (int i = 0; i < lifeIcons.Length; i++)
+        {
+            lifeIcons[i].SetActive(i < currentHealth);
+        }
+    }
+    
+    IEnumerator InvincibleBlink()
+    {
+        SpriteRenderer sr = GetComponent<SpriteRenderer>();
+        float blinkTime = 2f;
+        float blinkDuration = 0.1f;
+        
+        for (float t = 0; t < blinkTime; t += blinkDuration)
+        {
+            sr.enabled = !sr.enabled;
+            yield return new WaitForSeconds(blinkDuration);
+        }
+        sr.enabled = true;
+    }
+    
+    void GameOver()
+    {
+        Debug.Log("GAME OVER!");
+        Time.timeScale = 0; // 게임 일시정지
+    }
+}
+
+// ===== 5. Bullet.cs: 플레이어 총알 =====
+public class Bullet : MonoBehaviour
+{
+    public float speed = 10f;
+    public float lifetime = 2f;
+    
+    void Start()
+    {
+        Destroy(gameObject, lifetime);
+    }
+    
+    void Update()
+    {
+        transform.Translate(Vector3.up * speed * Time.deltaTime);
+    }
+    
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        if (other.CompareTag("Enemy") || other.CompareTag("Meteor"))
+        {
+            Destroy(other.gameObject);
+            Destroy(gameObject);
+        }
+    }
+}
+
+// ===== 6. GameManager.cs: 게임 전체 관리 =====
+public class GameManager : MonoBehaviour
+{
+    public static GameManager instance;
+    
+    [Header("프리팹")]
+    public GameObject playerPrefab;
+    public GameObject meteorPrefab;
+    public GameObject bulletPrefab;
+    public GameObject explosionPrefab;
+    
+    [Header("UI")]
+    public GameObject[] lifeIcons;
+    
+    private void Awake()
+    {
+        if (instance == null)
+        {
+            instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+        else
+        {
+            Destroy(gameObject);
+        }
+    }
+    
+    void Start()
+    {
+        // 기본 설정
+        SetupPlayer();
+        SetupSpawner();
+    }
+    
+    void SetupPlayer()
+    {
+        Instantiate(playerPrefab, Vector3.zero, Quaternion.identity);
+    }
+    
+    void SetupSpawner()
+    {
+        GameObject spawnerObj = new GameObject("MeteorSpawner");
+        MeteorSpawner spawner = spawnerObj.AddComponent<MeteorSpawner>();
+        spawner.meteorPrefab = meteorPrefab;
+    }
+}
